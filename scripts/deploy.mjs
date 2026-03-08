@@ -19,18 +19,25 @@ function computeExternalNullifierHash(appId, action) {
   return BigInt(ethers.keccak256(combined)) >> 8n;
 }
 
+function loadArtifact(contractPath) {
+  const fullPath = path.join(__dirname, "../artifacts/contracts", contractPath);
+  return JSON.parse(fs.readFileSync(fullPath, "utf-8"));
+}
+
+async function deployContract(wallet, artifact, args = []) {
+  const factory = new ethers.ContractFactory(artifact.abi, artifact.bytecode, wallet);
+  const contract = await factory.deploy(...args);
+  await contract.waitForDeployment();
+  return await contract.getAddress();
+}
+
 async function verifyContract(address, constructorArgs = []) {
   try {
-    console.log(`Verifying contract at ${address}...`);
-    await hre.run("verify:verify", {
-      address,
-      constructorArguments: constructorArgs,
-    });
-    console.log(`✓ Contract at ${address} verified successfully`);
-    return true;
+    console.log(`Verifying ${address}...`);
+    await hre.run("verify:verify", { address, constructorArguments: constructorArgs });
+    console.log(`  verified`);
   } catch (error) {
-    console.error(`✗ Verification failed for ${address}:`, error.message);
-    return false;
+    console.error(`  verification failed: ${error.message}`);
   }
 }
 
@@ -48,95 +55,41 @@ async function main() {
   const wallet = new ethers.Wallet(privateKey, provider);
 
   console.log("Deploying to WorldChain Mainnet");
-  console.log("From address:", wallet.address);
+  console.log("From:", wallet.address);
+  console.log("Balance:", ethers.formatEther(await provider.getBalance(wallet.address)), "ETH");
 
-  const network = await provider.getNetwork();
-  console.log("Network:", network.name, "Chain ID:", network.chainId.toString());
+  const deployed = {};
 
-  const balance = await provider.getBalance(wallet.address);
-  console.log("ETH balance:", ethers.formatEther(balance));
+  // WalletFactory
+  console.log("\n--- OpenLaborWalletFactory ---");
+  const factoryArtifact = loadArtifact("OpenLaborWalletFactory.sol/OpenLaborWalletFactory.json");
+  deployed.factory = await deployContract(wallet, factoryArtifact);
+  console.log("Deployed:", deployed.factory);
 
-  const deployedAddresses = {};
-
-  // Deploy OpenLaborWalletFactory
-  console.log("\n=== Deploying OpenLaborWalletFactory ===");
-  const factoryArtifacts = JSON.parse(fs.readFileSync(path.join(__dirname, "../artifacts/contracts/OpenLaborWalletFactory.sol/OpenLaborWalletFactory.json"), "utf-8"));
-  const factoryFactory = new ethers.ContractFactory(factoryArtifacts.abi, factoryArtifacts.bytecode.object, wallet);
-  const factoryContract = await factoryFactory.deploy();
-  await factoryContract.waitForDeployment();
-  const factoryAddress = await factoryContract.getAddress();
-  console.log("OpenLaborWalletFactory deployed to:", factoryAddress);
-  deployedAddresses.factory = factoryAddress;
-
-  // Deploy OpenLaborAgentRegistry
-  console.log("\n=== Deploying OpenLaborAgentRegistry ===");
+  // AgentRegistry
+  console.log("\n--- OpenLaborAgentRegistry ---");
   const externalNullifierHash = computeExternalNullifierHash(appId, action);
-  console.log("App ID:", appId);
-  console.log("Action:", action);
-  console.log("External Nullifier Hash:", externalNullifierHash.toString());
+  console.log("App:", appId, "| Action:", action);
+  const registryArtifact = loadArtifact("OpenLaborAgentRegistry.sol/OpenLaborAgentRegistry.json");
+  deployed.registry = await deployContract(wallet, registryArtifact, [WORLD_ID_ROUTER, GROUP_ID, externalNullifierHash]);
+  console.log("Deployed:", deployed.registry);
 
-  const registryArtifacts = JSON.parse(fs.readFileSync(path.join(__dirname, "../artifacts/contracts/OpenLaborAgentRegistry.sol/OpenLaborAgentRegistry.json"), "utf-8"));
-  const registryFactory = new ethers.ContractFactory(registryArtifacts.abi, registryArtifacts.bytecode.object, wallet);
-  const registryContract = await registryFactory.deploy(WORLD_ID_ROUTER, GROUP_ID, externalNullifierHash);
-  await registryContract.waitForDeployment();
-  const registryAddress = await registryContract.getAddress();
-  console.log("OpenLaborAgentRegistry deployed to:", registryAddress);
-  deployedAddresses.registry = registryAddress;
+  // Escrow
+  console.log("\n--- OpenLaborEscrow ---");
+  const escrowArtifact = loadArtifact("OpenLaborEscrow.sol/OpenLaborEscrow.json");
+  deployed.escrow = await deployContract(wallet, escrowArtifact, [USDC_ADDRESS, PERMIT2_ADDRESS]);
+  console.log("Deployed:", deployed.escrow);
 
-  // Deploy OpenLaborEscrow (if available)
-  console.log("\n=== Deploying OpenLaborEscrow ===");
-  const escrowAbiPath = path.join(__dirname, "../server/contracts/OpenLaborEscrowABI.json");
-  const escrowBytecodePath = path.join(__dirname, "../server/contracts/OpenLaborEscrowBytecode.json");
-  
-  if (fs.existsSync(escrowAbiPath) && fs.existsSync(escrowBytecodePath)) {
-    const escrowAbi = JSON.parse(fs.readFileSync(escrowAbiPath, "utf-8"));
-    const { bytecode } = JSON.parse(fs.readFileSync(escrowBytecodePath, "utf-8"));
-    
-    const escrowFactory = new ethers.ContractFactory(escrowAbi, bytecode, wallet);
-    const escrowContract = await escrowFactory.deploy(USDC_ADDRESS, PERMIT2_ADDRESS);
-    await escrowContract.waitForDeployment();
-    const escrowAddress = await escrowContract.getAddress();
-    console.log("OpenLaborEscrow deployed to:", escrowAddress);
-    deployedAddresses.escrow = escrowAddress;
-  } else {
-    console.log("OpenLaborEscrow not found - skipping (compile escrow contract first)");
-  }
+  // Verify all
+  console.log("\n--- Verifying ---");
+  await verifyContract(deployed.factory);
+  await verifyContract(deployed.registry, [WORLD_ID_ROUTER, GROUP_ID, externalNullifierHash.toString()]);
+  await verifyContract(deployed.escrow, [USDC_ADDRESS, PERMIT2_ADDRESS]);
 
-  // Verify contracts
-  console.log("\n=== Verifying Contracts ===");
-  
-  // Verify OpenLaborWalletFactory
-  await verifyContract(deployedAddresses.factory);
-
-  // Verify OpenLaborAgentRegistry
-  await verifyContract(deployedAddresses.registry, [WORLD_ID_ROUTER, GROUP_ID, externalNullifierHash.toString()]);
-
-  // Verify OpenLaborEscrow if deployed
-  if (deployedAddresses.escrow) {
-    await verifyContract(deployedAddresses.escrow, [USDC_ADDRESS, PERMIT2_ADDRESS]);
-  }
-
-  console.log("\n=== Deployment Complete ===");
-  console.log("\nContract Addresses:");
-  console.log("  OpenLaborWalletFactory:", deployedAddresses.factory);
-  console.log("  OpenLaborAgentRegistry:", deployedAddresses.registry);
-  if (deployedAddresses.escrow) {
-    console.log("  OpenLaborEscrow:", deployedAddresses.escrow);
-  }
-
-  console.log("\nWorldScan URLs:");
-  console.log("  OpenLaborWalletFactory: https://worldscan.io/address/" + deployedAddresses.factory);
-  console.log("  OpenLaborAgentRegistry: https://worldscan.io/address/" + deployedAddresses.registry);
-  if (deployedAddresses.escrow) {
-    console.log("  OpenLaborEscrow: https://worldscan.io/address/" + deployedAddresses.escrow);
-  }
-
-  console.log("\nEnvironment Variables:");
-  console.log("WALLET_FACTORY_ADDRESS=" + deployedAddresses.factory);
-  console.log("AGENT_REGISTRY_ADDRESS=" + deployedAddresses.registry);
-  if (deployedAddresses.escrow) {
-    console.log("ESCROW_CONTRACT_ADDRESS=" + deployedAddresses.escrow);
-  }
+  console.log("\n--- Done ---");
+  console.log("WALLET_FACTORY_ADDRESS=" + deployed.factory);
+  console.log("AGENT_REGISTRY_ADDRESS=" + deployed.registry);
+  console.log("ESCROW_CONTRACT_ADDRESS=" + deployed.escrow);
 }
 
 main().catch((error) => {

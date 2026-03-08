@@ -30,6 +30,15 @@ Deploys and manages OpenLaborSmartWallet instances.
 - Two-step admin transfer
 - Tracks all wallets per owner
 
+### OpenLaborEscrow
+
+Holds USDC in escrow for jobs. Clients deposit via [Permit2](https://github.com/Uniswap/permit2), the platform assigns workers, then releases payment or refunds.
+
+- Permit2-based deposits (gasless approvals)
+- Per-job escrow tracking
+- Owner-controlled release and refund
+- Two-step ownership transfer
+
 ## Setup
 
 ```bash
@@ -59,3 +68,4 @@ npm run deploy
 - Hardhat
 - ethers.js v6
 - WorldID
+- Permit2
