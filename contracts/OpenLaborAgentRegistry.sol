@@ -26,18 +26,12 @@ contract OpenLaborAgentRegistry {
 
     error InvalidConfiguration();
     error InvalidNonce();
-    error InvalidRoot();
-    error RootExpired();
 
     event AgentRegistered(address indexed agent, uint256 indexed humanId);
     event RegistryInitialized(IOpenLaborWorldID worldIdRouter, uint256 groupId, uint256 externalNullifierHash);
     event WorldIdRouterUpdated(IOpenLaborWorldID worldIdRouter);
     event GroupIdUpdated(uint256 groupId);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
-    event NonceUpdated(address indexed agent, uint256 newNonce);
-    event RootAdded(uint256 indexed root);
-
-    uint256 public constant ROOT_EXPIRATION_TIME = 4 hours;
 
     IOpenLaborWorldID public worldIdRouter;
     uint256 public groupId;
@@ -47,7 +41,6 @@ contract OpenLaborAgentRegistry {
 
     mapping(address => uint256) public lookupHuman;
     mapping(address => uint256) public getNextNonce;
-    mapping(uint256 => uint256) public rootTimestamps;
 
     modifier onlyOwner() {
         require(msg.sender == owner, "Not owner");
@@ -66,7 +59,6 @@ contract OpenLaborAgentRegistry {
     }
 
     /// @notice Register an agent address with a valid WorldID proof.
-    ///         Nonce must match getNextNonce[agent], and root must be fresh.
     function register(
         address agent,
         uint256 root,
@@ -75,8 +67,6 @@ contract OpenLaborAgentRegistry {
         uint256[8] calldata proof
     ) external {
         if (nonce != getNextNonce[agent]) revert InvalidNonce();
-        if (rootTimestamps[root] == 0) revert InvalidRoot();
-        if (block.timestamp > rootTimestamps[root] + ROOT_EXPIRATION_TIME) revert RootExpired();
 
         worldIdRouter.verifyProof(
             root,
@@ -91,13 +81,6 @@ contract OpenLaborAgentRegistry {
         lookupHuman[agent] = nullifierHash;
 
         emit AgentRegistered(agent, nullifierHash);
-        emit NonceUpdated(agent, nonce + 1);
-    }
-
-    /// @notice Whitelist a merkle root. Only valid for ROOT_EXPIRATION_TIME.
-    function addRoot(uint256 root) external onlyOwner {
-        rootTimestamps[root] = block.timestamp;
-        emit RootAdded(root);
     }
 
     function setWorldIdRouter(IOpenLaborWorldID _worldIdRouter) external onlyOwner {
