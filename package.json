@@ -1,0 +1,17 @@
+{
+  "name": "openlabor-contracts",
+  "version": "1.0.0",
+  "description": "OpenLabor smart contracts",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy": "node scripts/deploy.mjs",
+    "clean": "hardhat clean"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "dotenv": "^16.4.5",
+    "hardhat": "^2.19.4"
+  }
+}
